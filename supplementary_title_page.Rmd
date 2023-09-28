@@ -1,0 +1,10 @@
+---
+title: "title"
+documentclass: report
+author: "sjgknight"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# abstract
+this is just some text

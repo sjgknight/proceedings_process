@@ -1,0 +1,41 @@
+Some scripts intended to help in proces of collating papers for production of a conference proceedings (Specifically, from easychair, and for both a Springer volume, and supplementary proceedings).
+
+Mileage may vary...
+
+Create a `.Rprofile` file containing:
+
+`googlesheet_address = "a-url-to-a-googlesheet-with-a-sheet-of-papers"`
+
+You may need `basedir_full` and `basedir_supplement`
+
+`basedir = "c:/a-directory-path-with-the-papers-in"`
+
+`basename` describes the format of the filenames (from easychair in our case) prior to processing, e.g. ICQE23_paper_23.pdf, provide in form:
+
+`basename = "ICQE23_paper_"`
+
+`newname` describes the prepended volume number (for Springer)
+
+`newname = "1895-"`
+
+`editors` describes the editor names, string:
+
+`editors = "Golnaz Arastoopour Irgens, Simon Knight"`
+
+licensename = "ICQE23_LicensetoPublishForm_"
+
+Running the below will create the template:
+
+`writeLines('googlesheet_address = "xxx"\nbasedir_full = "xxx"\nbasedir_supplement = "xxx"\nbasename = "xxx"\nnewname = "xxx"\neditors = "xxx"\nlicensename = "xxx"', con = ".Rprofile")`
+
+I'm lazy so add
+
+```
+pacman::p_load(dplyr,
+               magrittr,
+               tibble,
+               tidyr,
+               fs,
+               stringr,
+               pdftools)
+```

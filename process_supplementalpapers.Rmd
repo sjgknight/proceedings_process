@@ -1,0 +1,369 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+
+pacman::p_load(dplyr,
+               magrittr,
+               tibble,
+               tidyr,
+               fs,
+               stringr,
+               pdftools)
+
+
+# Where are the things?
+basedir <- basedir_supplement
+
+```
+
+
+```{r data}
+# Get papers and filter to accepted and registered
+# Identify paper PDFs 
+# Add a filler row for the section breaks
+toc_tracker <- googlesheets4::read_sheet(googlesheet_address, sheet = "Sheet1") %>% 
+  janitor::clean_names() %>%
+  rename(paper_n = number)
+
+toc_tracker <- toc_tracker %>%
+  dplyr::filter(decision != "Paper") %>%
+  dplyr::filter(!grepl("WITHDREW", notes)) %>%
+  #mutate(decision = as.factor(decision)) %>%
+  dplyr::arrange(decision) %>%
+  mutate(
+    fullpdfs = str_c(basedir, basename, paper_n, ".pdf")) %>%
+  mutate(
+    decision = stringr::str_replace_all(decision, pattern = "PaperToPoster", replacement = "Poster")
+  ) 
+
+```
+
+```{r pdfation, eval=FALSE, include=FALSE}
+#needs fixing
+
+toc_tracker %>%
+  select(paper_n, fullpdfs) %>%
+  na.omit() %>%
+  purrr::pwalk(., 
+    function(paper_n, fullpdfs) {
+      # Wherever the set of pre-rendered files are
+      paper_location <- fs::path_dir(basedir)
+     
+      paper_doc <- paste0(basename, paper_n, ".doc")
+      paper_zip <- paste0(basename, paper_n, ".zip")
+     
+      find_paper <- fs::dir_ls(path = paper_location, 
+                               regexp = paste0(paper_doc, "|", paper_zip))
+      
+      cat(length(find_paper))
+
+      if (length(find_paper) > 0) {
+        if (any(fs::path_ext(find_paper) == "docm",
+            fs::path_ext(find_paper) == "docx"
+            )) {
+          doconv::docx2pdf(find_paper, output = fullpdfs)
+          cat(paste0("converted ", find_paper))
+        }
+      }
+    }
+  )
+        
+        # if (grepl(".zip", fs::path_ext(find_paper))) {
+        #   temp_dir <- tempfile()
+        #   unzip(find_paper, exdir = temp_dir)
+        #   tex_files <- fs::dir_ls(path = temp_dir, regexp = ".*\\.tex$")
+        #   
+        #   if (length(tex_files) > 0) {
+        #     # Assuming you want to compile all .tex files found in the ZIP
+        #     for (tex_file in tex_files) {
+        #       tinytex::latexmk(tex_file)
+        #     }
+        #     
+        #     pdf_files <- fs::dir_ls(path = temp_dir, regexp = ".*\\.pdf$")
+        #     if (length(pdf_files) > 0) {
+        #       file.copy(pdf_files, fullpdfs, overwrite = TRUE)
+        #       cat(paste0("converted ", pdf_files))
+        #     }
+        #   }
+        #   
+        #   unlink(temp_dir, recursive = TRUE)
+#        }
+  #     }
+  #   }
+  #   
+  # )
+  # 
+
+
+toc_tracker <- toc_tracker %>%
+  dplyr::filter(!is.na(paper_n)) %>%
+  rowwise() %>%
+  mutate(paper_raw = list(fs::dir_ls(path = fs::path_dir(basedir), 
+                                regexp = paste0(paste0(basename, paper_n, c("\\.docm$", "\\.docx", "\\.zip$"), collapse = "|")))
+         ),
+         has_pdf = list(fs::dir_ls(path = fs::path_dir(basedir), 
+                                regexp = paste0(paste0(basename, paper_n, "\\.pdf$")))),
+         has_doc = any(grepl("doc", paper_raw)),
+         has_zip = any(grepl("zip", paper_raw))
+        ) %>%
+  ungroup() 
+
+toc_tracker %>%
+  dplyr::pull(paper_raw) %>%
+  purrr::flatten_chr() %>%
+  purrr::walk(~ {
+    # Construct the source and destination paths
+    source_path <- .x
+    file_name <- fs::path_file(source_path)
+    destination_path <- fs::path(basedir,file_name)
+    
+    # Copy the file to the target directory
+    fs::file_copy(source_path, destination_path, overwrite = FALSE)
+    
+    # Optionally, you can print a message for each file copied
+    cat("Copied:", source_path, "to", destination_path, "\n")
+  })
+
+```
+
+
+```{r checkpages}
+
+cfp <- tribble(
+  ~type, ~length,
+  "Paper", 15,
+  "DC", 6,
+  "Poster", 4,
+  "Symposium", 8,
+  "Tutorial", 4,
+  "Workshop", 4,
+  "RAD", 2
+)
+
+# Function to check if page_count is greater than acceptable length
+check_page_count <- function(page_count, decision, paper_n) {
+  max_length <- cfp %>% 
+    dplyr::filter(type == decision) %>%
+    select(length) %>% paste0()
+  
+  if (!is.na(max_length) && page_count > max_length) {
+    return(paste0("Paper ", paper_n, " has too many pages (", page_count, " pages), expected at most ", max_length, " pages."))
+  } else {
+    return(NULL) # No warning
+  }
+}
+
+
+```
+
+```{r paginate}
+
+# Rearrange to order you want sections in, the != allows to move a paper to the end (e.g. so it can be appended late if received)  
+# And add section marker page-breaks for each decision type
+toc_tracker <- toc_tracker %>%
+    dplyr::group_by(decision) %>%
+    dplyr::group_split() %>%
+    purrr::map_dfr(~dplyr::add_row(., 
+                                   fullpdfs = str_c(basedir, basename, unique(.$decision), ".pdf"), 
+                                   title = unique(.$decision),
+                                   paper_n = 0,
+                                   decision = unique(.$decision))) %>%
+    ungroup() %>%
+    arrange(
+        match(decision, c("DC", "RAD", "Workshop", "Symposium", "Poster")),
+        paper_n) %>% arrange(paper_n == 70)
+
+# Create the PDFs for the page breaks
+toc_tracker %>%
+  dplyr::filter(grepl(paste(unique(decision), collapse = "|"), fullpdfs)) %>%
+  select(fullpdfs, title) %>%
+  purrr::pwalk(., function(fullpdfs, title) {
+    pdf(fullpdfs, width = 8.3, height = 11.7)
+    par(mar = c(0, 0, 0, 0))  # Set margins to zero
+    plot.new()
+    text(x = 0.5, y = 0.5, paste0(title), cex = 4, col = "black", font = 2)
+    dev.off()
+  })
+
+# Add the preamble pieces, both the contents and foreword, etc. 
+toc_tracker <- toc_tracker %>% 
+  add_row(.before = 0, title = "Preamble", authors = paste0(editors), fullpdfs = str_c(basedir, "preamble.pdf")) %>%
+  add_row(.after = 1, title = "Contents", fullpdfs = str_c(basedir, "contents.pdf"))
+
+
+# Page counts. You will need to either create dummy pages in the preamble doc, or add pages to it here
+toc_tracker <- toc_tracker %>%
+  rowwise() %>%
+  mutate(
+    page_count = ifelse(file.exists(fullpdfs), pdftools::pdf_length(fullpdfs), NA)
+  ) %>%
+  ungroup() %>%
+  mutate(
+#   page_count = if_else(title == "Preamble", 2, page_count),
+   page_count = if_else(is.na(page_count), 0, page_count)
+  )
+
+
+# Check page_count and add a warning column
+toc_tracker <- toc_tracker %>%
+  rowwise() %>%
+  mutate(warning = list(check_page_count(page_count, decision, paper_n)))
+
+unlist(toc_tracker$warning)
+
+# Add column
+toc_tracker$start_page <- NA
+
+#Adds page 1 to start of page_count, and then provides lagged cumulative sum to give the start page of each paper 
+toc_tracker$start_page[1:nrow(toc_tracker)] <- lag(cumsum(c(1,toc_tracker$page_count[1:nrow(toc_tracker)-1])),k = 1)
+
+```
+
+
+```{r contents}
+pacman::p_load(officer)
+# Create dummy contents page, it has a 12.2 right tab for the page number, and a tab for the author (but not title) lines
+# it seems to be easier to just cut and paste into the actual template and adjust manually
+# for the non-Springer version these could be output as a table
+
+doc_1 <- read_docx() %>% 
+  print(target = paste0(basedir, "contents.docx"))
+
+
+title_format <- fp_par(padding.top = 8, text.align = "justify")
+author_format <- fp_par(padding.top = 0, text.align = "justify")
+#page_format <- fp_par(text.align = "right", padding.top = 8)
+  
+toc_tracker %>%
+  #filter(page_count>2) %>%
+  select(title, authors, start_page) %>%
+purrr::pmap(function(title, authors, start_page){
+  
+  doc <- read_docx(path = paste0(basedir, "contents.docx"))
+  
+  title <- ftext(paste0(title, "\t", start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
+  #page <- ftext(paste0(start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
+  authors <- ftext(paste0("\t", authors), fp_text(font.size = 10, font.family = "Times New Roman", italic = T))
+
+title <- officer::fpar(title, fp_p = title_format)
+#page <- officer::fpar(page, fp_p = page_format)
+authors <- officer::fpar(authors, fp_p = author_format)
+
+
+
+doc %>%
+  body_add_fpar(title) %>% 
+  body_add_fpar(authors) %>%
+  print(target = paste0(basedir, "contents.docx"))
+
+}) 
+
+#author index page start:
+toc_tracker$start_page[nrow(toc_tracker)] + toc_tracker$page_count[nrow(toc_tracker)]
+
+
+#might be better to do this with huxtable for the supplement
+
+```
+
+
+```{r bibify}
+options(encoding="UTF-8")
+
+toc_tracker <- toc_tracker %>% 
+  mutate(AUTHOR = stringr::str_split(authors, ","), 
+         BIBTEXKEY = stringr::str_remove_all(paste0(tolower(AUTHOR[1]), stringr::str_trunc(title, 15, ellipsis = "")), " ")
+)
+
+toc_tracker %>%
+  dplyr::filter(is.na(paper_n)|paper_n != 0) %>%
+  dplyr::filter(title != "Contents") %>%
+  mutate(
+  CATEGORY = "InProceedings",
+  TITLE = title,
+  EDITOR = list(list("Arastoopour Irgens, Golnaz", "Knight, Simon")),
+  YEAR = 2023,
+  PUBLISHER = "ISQE",
+  BOOKTITLE = "Supplementary Proceedings of the Fifth International Conference on Quantitative Ethnography (ICQE23)",
+  ADDRESS = "Melbourne, Australia",
+  PAGES = paste0(start_page, "-", start_page+page_count),
+  ORGANIZATION = "International Society for Quantitative Ethnography (ISQE)",
+  NOTE = paste0("https://www.qesoc.org/images/pdf/ICQE23_Supplement_Proceedings.pdf#page=", start_page)
+  ) %>%
+  select(CATEGORY, BIBTEXKEY, AUTHOR, EDITOR, TITLE, YEAR, PUBLISHER, PAGES, BOOKTITLE, ADDRESS, ORGANIZATION) %>%
+    bib2df::df2bib("ICQE23_supplementary.bib")
+
+
+
+x <- bibtex::read.bib("ICQE23_supplementary.bib")
+
+toc_tracker <- toc_tracker %>% 
+  mutate(topage = start_page + page_count,
+         citeas = ifelse(length(x[BIBTEXKEY])>0, format(x[BIBTEXKEY]), NA_character_)
+  )
+
+```
+
+```{r stamp}
+# Doesn't doesn't work
+#convert everything to PDF 
+#put the full PDF together
+
+animation::ani.options(pdftk = "C:/Program Files (x86)/bin/pdftk.exe")
+
+# a function to stamp PDFs
+stamp_pdfs <- function(fullpdfs, start_page, page_count, citeas){
+  StampText <- glue::glue("Cite as: {citeas}")
+  stamp <- glue::glue('stamp "\\def\\pagestext{{Page {start_page} of {page_count}}}\\color{{gray}}\\tiny\\begin{{minipage}}[b]{{0.5in}}\\centering {StampText}\\end{{minipage}}"')
+  animation::pdftk(input = fullpdfs, operation = stamp, output = shQuote(paste0(fullpdfs,"and.pdf")))
+}
+
+toc_tracker %>%
+  select(fullpdfs, start_page, page_count, citeas) %>%
+  na.omit() %>%
+purrr::pmap(., stamp_pdfs)
+
+
+
+# Define a function to combine multiple PDFs into one
+combine_pdfs <- function(pdf_files, output_pdf = "output.pdf") {
+  out_name <- output_pdf
+  output_pdf <- pdf(paper = "a4", file = output_pdf)
+  dev.off()
+  graphics.off()
+  
+  setwd(fs::path_dir(pdf_files[1]))
+  
+  lapply(pdf_files, function(x){basename(x)})
+  
+  pdf_list <- paste(shQuote(pdf_files), collapse = " ")
+  #pdf_list <- paste(shQuote(pdf_files))
+  
+    # Iterate through each PDF file and append it to the temporary file
+  # for (pdf_file in pdf_list) {
+  #   current_out <- out_name
+  #   new_out <- 
+  #   command <- glue::glue("pdftk {shQuote(out_name)} {pdf_file} cat output {shQuote(out_name)}")
+  #   system(command)
+  # }
+  
+  #file.rename(output_pdf, output_pdf)
+  command <- paste("pdftk", pdf_list, "cat output", shQuote(out_name))
+  system(command)
+  
+  cat(out_name)
+}
+
+toc_tracker %>%
+    select(fullpdfs) %>%
+    dplyr::filter(file_exists(fullpdfs)) %>%
+  pull(fullpdfs) %>%
+  combine_pdfs(., "ICQE23_Supplement_Proceedings.pdf")
+
+```
+

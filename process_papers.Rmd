@@ -1,0 +1,239 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+#these are already loaded with .Rprofile
+#assumes you have already created the .Renviron file (see README)
+
+pacman::p_load(dplyr,
+               magrittr,
+               tibble,
+               tidyr,
+               fs,
+               stringr,
+               pdftools)
+
+#https://delim.co/# 
+
+basedir <- basedir_full
+
+```
+
+```{r params}
+
+full_papers <- c("3","4","7","8","9","11","12","13","15","16","17","18","19","21","23","24","25","26","27","28","29","30","31","32","33","35","37","38","39","40","41","43","45")
+
+
+
+```
+
+
+```{r data}
+#probably don't use this approach, just get everything from the googlesheet. 
+#you can also group by SECTION that way
+#and run the check of whether each paper has the PDF, license, docx/tex
+
+toc <- tibble(paper_n = full_papers) %>%
+  mutate(
+    fullpdfs = str_c(basedir, basename, paper_n, ".pdf")) %>%
+  rowwise() %>%
+  mutate(
+    page_count = ifelse(file.exists(fullpdfs), pdftools::pdf_length(fullpdfs), NA)
+  )
+
+
+toc_tracker <- googlesheets4::read_sheet(googlesheet_address, sheet = "TOC") %>% 
+  janitor::clean_names() %>%
+  mutate(n_1 = as.character(n_1)) %>% 
+  rename(paper_n = n_1)
+
+toc_tracker <- dplyr::left_join(toc_tracker, toc, join_by(paper_n == paper_n))
+
+toc_tracker <- toc_tracker %>%
+  #rowid_to_column() %>%
+  #arrange(as.numeric(paper_n)) %>%
+  mutate(
+    page_count = if_else(is.na(page_count), 0, page_count),
+    page_count = if_else(grepl(x = paper_n, pattern = "section", ignore.case = T),
+                         1, page_count)
+  )
+
+# Add the start pages
+toc_tracker$page_count[1:3] <- c(1,1,2) #give preamble a pagecount of 1 so the other pages are correct
+#toc_tracker$start_page[1:3] <- c("preamble",1,2)
+
+# Add column
+toc_tracker$start_page <- NA
+
+toc_tracker$start_page[1:nrow(toc_tracker)] <- lag(cumsum(toc_tracker$page_count[1:nrow(toc_tracker)]), 1)
+
+toc_tracker <- toc_tracker %>%
+  mutate(subdir_name = str_c(basedir, "ICQE23_paper_", paper_n),
+         pdf_name = ifelse(page_count > 2, glue::glue("1895-{start_page}.pdf"), ""),
+         newdir = ifelse(page_count>2,
+                         paste0(basedir, newname, "SpringerFiles/", newname, start_page, ".zip"),
+                         "")
+         )
+
+
+# toc <- toc %>%
+#   #arrange(as.numeric(paper_n)) %>%
+#   mutate(
+#     page_count = if_else(is.na(page_count), 0, page_count),
+#     start_page = cumsum(if_else(row_number() == 1, 1, lag(page_count, n = 1))
+#   ))
+
+
+```
+
+```{r function}
+
+# Function to create subdirectories and move files
+create_and_move_subdirectories <- function(x, basedir) {
+  for (x_value in x) {
+    #x_value <- 13
+    # Create subdirectory name with the specified base directory
+    subdir_name <- str_c(basedir, basename, x_value)
+    
+    # Check if the subdirectory already exists
+    if (!dir_exists(subdir_name)) {
+      # If it doesn't exist, create it
+      dir_create(subdir_name)
+      
+      # List PDFs in the parent directory with the specified pattern
+      pdf_file <- str_c(basedir, licensename, x_value, ".pdf")
+
+      if(file.exists(pdf_file)){
+        file_move(pdf_file, subdir_name)
+      }
+    } else {
+      cat("Subdirectory", subdir_name, "already exists. Skipping...\n")
+    }
+  }
+  
+}
+
+
+# Create directories and move the license into them
+create_and_move_subdirectories(basedir = basedir, x = full_papers)
+# DONE
+
+
+# Batch convert docx to pdf
+# may not work well, but line would be:
+# doconv::docx2pdf(input, output = gsub("\\.(docx|doc|rtf)$", ".pdf", input))
+
+#Move a copy of the PDF into each directory with the editable versions
+purrr::pmap(list(fullpdfs = toc_tracker$fullpdfs, subdir_name = toc_tracker$subdir_name),
+     function(fullpdfs, subdir_name){
+        file.copy(fullpdfs, file.path(subdir_name, basename(fullpdfs)))
+     })
+
+
+# create the renamed PDFs in subdir newname-SpringerFiles 
+purrr::map2(toc_tracker$fullpdfs, toc_tracker$pdf_name, ~{
+  orig <- .x 
+  orig_stem <- dirname(orig)
+  new <- paste0(basedir, "/", newname, "SpringerFiles/", .y)
+  file.copy(orig, new)
+})
+
+
+# rename the directories and zip them
+## Create zips
+#subdir_name is the subdir to zip, newdir is the name of the zip, with the correct path
+             #this works:
+#test <- list.files(toc_tracker$subdir_name[4], recursive = T, full.names = F, include.dirs = T)
+#zip::zip(zipfile = paste0(basedir,"/","tst.zip"), files = c(test), include_directories = T, recurse = T, root = toc_tracker$subdir_name[4])
+
+toc_tracker %>%
+  filter(page_count>2) %>%
+  select(subdir_name, newdir) %>%
+purrr::pmap(function(subdir_name, newdir){
+              
+              #list contents of directory
+              contents <- list.files(subdir_name, recursive = T, full.names = F, include.dirs = T)
+ 
+              # Create the zipfile at newdir, with files = contents
+              # root sets the root directory for the zip inside the target directory
+              zip::zip(zipfile = newdir, 
+                       files = contents,
+                       include_directories = T,
+                       recurse = T,
+                       root = subdir_name
+                       )
+              
+            })
+
+
+# Create dummy contents page, it has a 12.2 right tab for the page number, and a tab for the author (but not title) lines
+# it seems to be easier to just cut and paste into the actual template and adjust manually
+
+doc_1 <- read_docx() %>% 
+  print(target = paste0(basedir, "contents.docx"))
+
+
+title_format <- fp_par(padding.top = 8, text.align = "justify")
+author_format <- fp_par(padding.top = 0, text.align = "justify")
+  
+toc_tracker %>%
+  filter(page_count>2) %>%
+  select(title, authors, start_page) %>%
+purrr::pmap(function(title, authors, start_page){
+  
+  doc <- read_docx(path = paste0(basedir, "contents.docx"))
+  
+  title <- ftext(paste0(title, "\t", start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
+  authors <- ftext(paste0("\t", authors), fp_text(font.size = 10, font.family = "Times New Roman", italic = T))
+
+title <- officer::fpar(title, fp_p = title_format)
+authors <- officer::fpar(authors, fp_p = author_format)
+doc %>%
+    body_add_fpar(title) %>% 
+    body_add_fpar(authors) %>%
+  print(target = paste0(basedir, "contents.docx"))
+
+}) 
+
+#author index page start:
+toc_tracker$start_page[nrow(toc_tracker)] + toc_tracker$page_count[nrow(toc_tracker)]
+
+
+# Export just the elements needed for Springer
+toc_tracker %>%
+  select(-c(checkrego, filechecked, licensechecked, pagecount, pages, number, n_21, fullpdfs, subdir_name, newdir)) %>%
+readr::write_csv(., paste0(basedir,"/toc_tracker_",Sys.Date(),".csv"))
+
+
+
+```
+
+
+```{r fuckssake}
+#if idiot occurs, may be useful
+
+purrr::pmap(list(fullpdfs = toc_tracker$fullpdfs, subdir_name = toc_tracker$subdir_name),
+     function(fullpdfs, subdir_name){
+        file.copy(paste0(subdir_name, "/", basename(fullpdfs)), file.path(basedir, basename(fullpdfs)))
+     })
+
+
+x <- list.files(basedir, pattern = "PUBLISHERREADY.*.pdf", full.names = T)
+
+lapply(x, function(pdf){
+  orig <- basename(pdf)
+  orig_dir <- dirname(pdf)
+  new <- stringr::str_replace(orig, "PUBLISHERREADY", "1895-")
+  new_name <- paste0(orig_dir, new)
+  #new_name
+  file.rename(pdf, new_name)
+})
+
+
+
+
+```

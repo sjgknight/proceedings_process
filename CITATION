@@ -1,0 +1,9 @@
+bibentry(
+  key = "knightproceedings2023",
+  bibtype  = "Misc",
+  url = "https://github.com/sjgknight/proceedings_process",
+  author = c(person("Knight", "Simon")),
+  title = "Scripts for processing files for publication of proceedings",
+  publisher = "github",
+  year = "2023"
+)

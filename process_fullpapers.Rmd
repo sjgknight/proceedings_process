@@ -1,0 +1,177 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+
+pacman::p_load(dplyr,
+               magrittr,
+               tibble,
+               tidyr,
+               fs,
+               stringr,
+               pdftools)
+
+
+# Where are the things?
+basedir <- basedir_supplement
+
+```
+
+
+```{r data}
+# Get papers and filter to accepted and registered
+# Identify paper PDFs 
+# Add a filler row for the section breaks
+toc_tracker <- googlesheets4::read_sheet(googlesheet_address, sheet = "Sheet1") %>% 
+  janitor::clean_names() %>%
+  rename(paper_n = number) %>%
+  filter(decision == "Paper") %>%
+  filter(!stringr::str_detect(notes, pattern = "WITHDREW" )) %>%
+  dplyr::arrange(decision) %>%
+  mutate(
+    fullpdfs = str_c(basedir, basename, paper_n, ".pdf")) %>%
+  dplyr::group_by(section) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(~dplyr::add_row(., fullpdfs = str_c(basedir, basename, distinct(.$section), ".pdf"), title = distinct(.$section))) %>%
+  ungroup() 
+
+
+# Create the PDFs for the page breaks
+toc_tracker %>%
+  filter(any(stringr::str_detect(fullpdfs, distinct(section)))) %>%
+  select(fullpdfs, title) %>%
+  purrr::pwalk(function(file, section) {
+    pdf(file, width = 8.3, height = 11.7)
+    par(mar = c(0, 0, 0, 0))  # Set margins to zero
+    plot.new()
+    text(x = 0.5, y = 0.5, paste0(section), cex = 4, col = "black", font = 2)
+    dev.off()
+  })
+
+
+# Add the preamble pieces, both the contents and foreword, etc. 
+toc_tracker <- toc_tracker %>% 
+  add_row(.before = 0, title = "Preamble", authors = paste0(editors), fullpdfs = str_c(basedir, "preamble.pdf")) %>%
+  add_row(.after = 1, title = "Contents", fullpdfs = str_c(basedir, "contents.pdf"))
+
+
+```
+
+
+```{r}
+
+# Page counts. You will need to either create dummy pages in the preamble doc, or add pages to it here
+toc_tracker <- toc_tracker %>%
+  rowwise() %>%
+  mutate(
+    page_count = ifelse(file.exists(fullpdfs, pdftools::pdf_length(fullpdfs), NA))
+  ) %>%
+  ungroup() %>%
+  mutate(
+   page_count = if_else(is.na(page_count), 0, page_count)
+  )
+
+
+# Add column
+toc_tracker$start_page <- NA
+
+toc_tracker$start_page[1:nrow(toc_tracker)] <- lag(cumsum(toc_tracker$page_count[1:nrow(toc_tracker)]), 1)
+
+
+```
+
+
+```{r contents}
+
+# Create dummy contents page, it has a 12.2 right tab for the page number, and a tab for the author (but not title) lines
+# it seems to be easier to just cut and paste into the actual template and adjust manually
+
+doc_1 <- read_docx() %>% 
+  print(target = paste0(basedir, "contents.docx"))
+
+
+title_format <- fp_par(padding.top = 8, text.align = "justify")
+author_format <- fp_par(padding.top = 0, text.align = "justify")
+  
+toc_tracker %>%
+  #filter(page_count>2) %>%
+  select(title, authors, start_page) %>%
+purrr::pmap(function(title, authors, start_page){
+  
+  doc <- read_docx(path = paste0(basedir, "contents.docx"))
+  
+  title <- ftext(paste0(title, "\t", start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
+  authors <- ftext(paste0("\t", authors), fp_text(font.size = 10, font.family = "Times New Roman", italic = T))
+
+title <- officer::fpar(title, fp_p = title_format)
+authors <- officer::fpar(authors, fp_p = author_format)
+doc %>%
+    body_add_fpar(title) %>% 
+    body_add_fpar(authors) %>%
+  print(target = paste0(basedir, "contents.docx"))
+
+}) 
+
+#author index page start:
+toc_tracker$start_page[nrow(toc_tracker)] + toc_tracker$page_count[nrow(toc_tracker)]
+
+
+
+```
+
+
+```{r assemble}
+#convert everything to PDF 
+
+#put the full PDF together
+
+#ideally add page numbers
+
+toc_tracker %>% 
+  mutate(
+  CATEGORY = "conference",
+  AUTHOR = stringr::str_split(authors, ","), 
+  TITLE = title,
+  BIBTEXKEY = paste0(tolower(AUTHOR[1]), stringr::str_replace_all(stringr::str_trunc(TITLE, 15), " ", "")),
+  EDITOR = c("Arastopoor, Arastoopour Irgens", "Knight, Simon"),
+  YEAR = 2023,
+  PUBLISHER = "ISQE",
+  BOOKTITLE = "Supplementary Proceedings of the Fifth International Conference on Quantitative Ethnography (ICQE23)",
+  ADDRESS = "Melbourne, Australia",
+  PAGES = paste0(start_page, "-", start_page+page_count),
+  ORGANIZATION = "International Society for Quantitative Ethnography (ISQE)",
+  NOTE = paste0("https://www.qesoc.org/images/pdf/ICQE23_Supplement_Proceedings.pdf#page=", start_page)
+  ) %>%
+  select(CATEGORY, BIBTEXKEY, AUTHOR, EDITOR, TITLE, YEAR, PUBLISHER, PAGES, BOOKTITLE, ADDRESS, ORGANIZATION) %>%
+    bib2df::df2bib("ICQE23_supplementary.bib")
+
+
+animation::ani.options(pdftk = "C:/Program Files (x86)/bin/pdftk.exe")
+
+
+
+StampText <- glue::glue("Cite as: ...")
+
+stamp <- glue::glue('stamp "\\def\\pagestext{{Page [page] of [topage]}}\\color{{gray}}\\tiny\\begin{{minipage}}[b]{{0.5in}}\\centering {StampText}\\end{{minipage}}"')
+
+stamp <- glue::glue("stamp 'hello world'")
+
+animation::pdftk(input = paste0("C:/Users/125295_admin/AppLockerExceptions/proceedings_process/", "test.pdf"), operation = stamp, output = paste0('"C:/Users/125295_admin/AppLockerExceptions/proceedings_process/"', 'test2.pdf"'))
+
+
+
+# Define a function to combine multiple PDFs into one
+combine_pdfs <- function(pdf_files, output_pdf) {
+  pdf_list <- paste(shQuote(pdf_files), collapse = " ")
+  command <- paste("pdftk", pdf_list, "cat output", shQuote(output_pdf))
+  system(command)
+}
+
+combine_pdfs(pdf_files_to_combine, "ICQE23_Supplement_Proceedings.pdf")
+
+```
+
