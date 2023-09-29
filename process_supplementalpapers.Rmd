@@ -19,6 +19,25 @@ pacman::p_load(dplyr,
 # Where are the things?
 basedir <- basedir_supplement
 
+#thanks to datapasta::df_paste()
+sample_data <- data.frame(
+         stringsAsFactors = FALSE,
+                  paper_n = c(51, 52),
+                  authors = c("A name","And another"),
+                    title = c("My research is amazing",
+                              "I have found flaws in other peoples research"),
+                 category = c("DC submission","DC submission"),
+                   topics = c("Applications in Education Contexts",
+                              "Applications in Education Contexts"),
+                 decision = c("Poster", "PapertoPoster"),
+  license_to_publish_form = c(NULL, NULL),
+              final_draft = c(1, 1),
+        presenting_author = c(NA, "And another"),
+               registered = c(1, 1),
+                    notes = c(NA, NA),
+                    check = c(NA, NA)
+)
+
 ```
 
 
@@ -178,7 +197,18 @@ toc_tracker <- toc_tracker %>%
         match(decision, c("DC", "RAD", "Workshop", "Symposium", "Poster")),
         paper_n) %>% arrange(paper_n == 70)
 
-# Create the PDFs for the page breaks
+
+toc_tracker <- toc_tracker %>%
+  mutate(title = case_when(
+    title == "DC" ~ "Doctoral Consortium Submissions",
+    title == "Poster" ~ "Poster Submissions",
+    title == "Workshop" ~ "Workshop Submissions",
+    title == "Symposium" ~ "Symposium Submissions",
+    title == "RAD" ~ "Research Agenda Development Submissions"
+    TRUE ~ title
+  ))
+
+# Filter by matching the decision to the fullpdf string, and create those PDFs for the page breaks
 toc_tracker %>%
   dplyr::filter(grepl(paste(unique(decision), collapse = "|"), fullpdfs)) %>%
   select(fullpdfs, title) %>%
@@ -186,13 +216,13 @@ toc_tracker %>%
     pdf(fullpdfs, width = 8.3, height = 11.7)
     par(mar = c(0, 0, 0, 0))  # Set margins to zero
     plot.new()
-    text(x = 0.5, y = 0.5, paste0(title), cex = 4, col = "black", font = 2)
+    text(x = 0.5, y = 0.5, paste0(title), cex = 2, col = "black", font = 2)
     dev.off()
   })
 
 # Add the preamble pieces, both the contents and foreword, etc. 
 toc_tracker <- toc_tracker %>% 
-  add_row(.before = 0, title = "Preamble", authors = paste0(editors), fullpdfs = str_c(basedir, "preamble.pdf")) %>%
+  add_row(.before = 0, title = "Foreword to ICQE23 Supplementary Proceedings", authors = paste0(editors), fullpdfs = str_c(basedir, "preamble.pdf")) %>%
   add_row(.after = 1, title = "Contents", fullpdfs = str_c(basedir, "contents.pdf"))
 
 
@@ -231,37 +261,34 @@ pacman::p_load(officer)
 # it seems to be easier to just cut and paste into the actual template and adjust manually
 # for the non-Springer version these could be output as a table
 
-doc_1 <- read_docx() %>% 
-  print(target = paste0(basedir, "contents.docx"))
 
 
-title_format <- fp_par(padding.top = 8, text.align = "justify")
-author_format <- fp_par(padding.top = 0, text.align = "justify")
-#page_format <- fp_par(text.align = "right", padding.top = 8)
-  
-toc_tracker %>%
+library(flextable)
+
+cont <- toc_tracker %>%
   #filter(page_count>2) %>%
   select(title, authors, start_page) %>%
-purrr::pmap(function(title, authors, start_page){
-  
-  doc <- read_docx(path = paste0(basedir, "contents.docx"))
-  
-  title <- ftext(paste0(title, "\t", start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
-  #page <- ftext(paste0(start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
-  authors <- ftext(paste0("\t", authors), fp_text(font.size = 10, font.family = "Times New Roman", italic = T))
+  flextable::flextable(col_keys = c("authors", "start_page")) %>%
+  mk_par(j = "authors", value = as_paragraph(title, "\n\t", as_i(authors))) %>%
+  flextable::padding(padding.top = .8) %>%
+  flextable::border_remove() %>%
+  flextable::fontsize(size = 10) %>%
+  flextable::font(fontname = "Times New Roman") %>%
+  flextable::valign(valign = "top") %>%
+  flextable::set_table_properties(opts_word = list(keep_with_next = T)) %>%
+  flextable::width(width = c(13,2), unit = "cm")
 
-title <- officer::fpar(title, fp_p = title_format)
-#page <- officer::fpar(page, fp_p = page_format)
-authors <- officer::fpar(authors, fp_p = author_format)
+flextable::save_as_docx(cont, 
+                        path = paste0(basedir,"contents.docx"),
+                        pr_section = prop_section(
+                          page_size = page_size(
+                            orient = "portrait",
+                            width = 8.3, height = 11.7),
+                          type = "continuous",
+                          page_margins = page_mar()
+                          )
+)
 
-
-
-doc %>%
-  body_add_fpar(title) %>% 
-  body_add_fpar(authors) %>%
-  print(target = paste0(basedir, "contents.docx"))
-
-}) 
 
 #author index page start:
 toc_tracker$start_page[nrow(toc_tracker)] + toc_tracker$page_count[nrow(toc_tracker)]
@@ -280,6 +307,7 @@ toc_tracker <- toc_tracker %>%
          BIBTEXKEY = stringr::str_remove_all(paste0(tolower(AUTHOR[1]), stringr::str_trunc(title, 15, ellipsis = "")), " ")
 )
 
+#+2 to the startpage to account for the cover and copyright pages 
 toc_tracker %>%
   dplyr::filter(is.na(paper_n)|paper_n != 0) %>%
   dplyr::filter(title != "Contents") %>%
@@ -288,19 +316,33 @@ toc_tracker %>%
   TITLE = title,
   EDITOR = list(list("Arastoopour Irgens, Golnaz", "Knight, Simon")),
   YEAR = 2023,
+  MONTH = "Oct",
+  EVENTDATE = "08-12 October 2023",
   PUBLISHER = "ISQE",
-  BOOKTITLE = "Supplementary Proceedings of the Fifth International Conference on Quantitative Ethnography (ICQE23)",
+  BOOKTITLE = "Fifth International Conference on Quantitative Ethnography: Conference Proceedings Supplement",
   ADDRESS = "Melbourne, Australia",
   PAGES = paste0(start_page, "-", start_page+page_count),
   ORGANIZATION = "International Society for Quantitative Ethnography (ISQE)",
-  NOTE = paste0("https://www.qesoc.org/images/pdf/ICQE23_Supplement_Proceedings.pdf#page=", start_page)
-  ) %>%
-  select(CATEGORY, BIBTEXKEY, AUTHOR, EDITOR, TITLE, YEAR, PUBLISHER, PAGES, BOOKTITLE, ADDRESS, ORGANIZATION) %>%
-    bib2df::df2bib("ICQE23_supplementary.bib")
+  NOTE = paste0("https://www.qesoc.org/images/pdf/ICQE23_Supplement_Proceedings.pdf#page=", start_page+2)
+  ) %>% 
+  select(CATEGORY, BIBTEXKEY, AUTHOR, EDITOR, TITLE, YEAR, MONTH, EVENTDATE, PUBLISHER, PAGES, BOOKTITLE, ADDRESS, ORGANIZATION, NOTE) %>%
+    dplyr::rows_append(tibble(
+      CATEGORY = "Proceedings",
+      TITLE = "Fifth International Conference on Quantitative Ethnography: Conference Proceedings Supplement",
+      EDITOR = list(list("Arastoopour Irgens, Golnaz", "Knight, Simon")),
+      BIBTEXKEY = "ArastoopourIrgensKnightICQE23",
+      YEAR = 2023,
+      MONTH = "Oct",
+      EVENTDATE = "08-12 October 2023",
+      PUBLISHER = "The International Society for Quantitative Ethnography (ISEQE)",
+      ADDRESS = "Melbourne, Australia",
+      NOTE = "https://www.qesoc.org/proceedings/",
+      ORGANIZATION = "International Society for Quantitative Ethnography (ISQE)",
+    )) %>%
+    bib2df::df2bib(paste0(basedir, "ICQE23_supplementary.bib"))
 
 
-
-x <- bibtex::read.bib("ICQE23_supplementary.bib")
+x <- bibtex::read.bib(paste0(basedir, "ICQE23_supplementary.bib"))
 
 toc_tracker <- toc_tracker %>% 
   mutate(topage = start_page + page_count,
@@ -309,8 +351,64 @@ toc_tracker <- toc_tracker %>%
 
 ```
 
-```{r stamp}
-# Doesn't doesn't work
+```{r titlepages}
+#make a basic title page
+
+copyright_statement <- paste0(x["ArastoopourIrgensKnightICQE23"]$title, ", ",
+                              x["ArastoopourIrgensKnightICQE23"]$eventdate, ". © ",
+                              x["ArastoopourIrgensKnightICQE23"]$year, " ", x["ArastoopourIrgensKnightICQE23"]$publisher, ". Rights reserved.",
+                              "\n\nCite as: ", format(x["ArastoopourIrgensKnightICQE23"]), " \n\n",
+                              "All rights reserved. Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear the copyright notice and the full citation on the first page. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior written permission of ", x["ArastoopourIrgensKnightICQE23"]$publisher, ".\n\n", x["ArastoopourIrgensKnightICQE23"]$publisher, " is not responsible for the use which might be made of the information contained in this book.")
+
+# Create a PDF for the title page
+pdf(paper = "a4", file = paste0(basedir, "cover.pdf"), onefile = TRUE)
+
+# Set up the graphical parameters (font size, alignment, etc.)
+par(mar = c(0, 0, 0, 0), cex = 1.5)  # Adjust these settings as needed
+
+# Create an empty plot
+plot.new()
+
+# Create the title page content
+title_text <- x["ArastoopourIrgensKnightICQE23"]$title
+event_date <- x["ArastoopourIrgensKnightICQE23"]$eventdate
+address <- x["ArastoopourIrgensKnightICQE23"]$address
+editors <- paste0("Editors: ", stringr::str_flatten_comma(x["ArastoopourIrgensKnightICQE23"]$editor))
+
+# Wrap and display the text elements
+title_text_wrapped <- str_wrap(title_text, 30)
+event_date_wrapped <- str_wrap(event_date, 40)
+address_wrapped <- str_wrap(address, 40)
+editors_wrapped <- str_wrap(editors, 40)
+
+# Use text() to add and format text elements
+text(x = 0.5, y = 0.8, labels = title_text_wrapped, col = "black", cex = 1.7)
+text(x = 0.5, y = 0.4, labels = event_date_wrapped, col = "black", cex = 1.2)
+text(x = 0.5, y = 0.3, labels = address_wrapped, col = "black")
+text(x = 0.5, y = 0.1, labels = editors_wrapped, col = "black")
+
+# Set up the graphical parameters (font size, alignment, etc.)
+par(mar = c(0, 0, 0, 0))  # Adjust these settings as needed
+
+plot.new()
+
+copyright_statement2 <- copyright_statement %>% 
+  stringr::str_split(., "\n") %>%
+  purrr::map(~str_wrap(.x, 70)) %>%
+  purrr::flatten() %>%
+        paste(collapse = "\n")
+
+#ideally render as markdown, maybe ggtext?
+text(x = 0.5, y = 0.5, labels = copyright_statement2, col = "darkgrey", cex = .5)
+
+# Close the PDF file
+dev.off()
+
+```
+
+
+```{r stamp, eval=FALSE, include=FALSE}
+# Doesn't doesn't work. Oh well
 #convert everything to PDF 
 #put the full PDF together
 
@@ -327,10 +425,13 @@ toc_tracker %>%
   select(fullpdfs, start_page, page_count, citeas) %>%
   na.omit() %>%
 purrr::pmap(., stamp_pdfs)
+```
 
-
-
+```{r combine}
+#tinytex::tlmgr_install('pdfcrop')
 # Define a function to combine multiple PDFs into one
+# This moves into the wd of the files because otherwise it hits a path limit issue (in windows)
+# I tried a loop and appending, but you can't have input=output and I couldn't see the obvious 'append' option for combining files
 combine_pdfs <- function(pdf_files, output_pdf = "output.pdf") {
   out_name <- output_pdf
   output_pdf <- pdf(paper = "a4", file = output_pdf)
@@ -339,19 +440,25 @@ combine_pdfs <- function(pdf_files, output_pdf = "output.pdf") {
   
   setwd(fs::path_dir(pdf_files[1]))
   
-  lapply(pdf_files, function(x){basename(x)})
+  pdf_files <- sapply(pdf_files, function(x){basename(x)})
   
-  pdf_list <- paste(shQuote(pdf_files), collapse = " ")
-  #pdf_list <- paste(shQuote(pdf_files))
   
-    # Iterate through each PDF file and append it to the temporary file
-  # for (pdf_file in pdf_list) {
-  #   current_out <- out_name
-  #   new_out <- 
-  #   command <- glue::glue("pdftk {shQuote(out_name)} {pdf_file} cat output {shQuote(out_name)}")
+  #  for (pdf_file in pdf_list) {
+  # #   current_out <- out_name
+  # #   new_out <- 
+  # # Iterate through each PDF file and append it to the temporary file. Doesn't work per above
+  # #   command <- glue::glue("pdftk {shQuote(out_name)} {pdf_file} cat output {shQuote(out_name)}")
+  #    
+  #    pdftools::pdf_pagesize(pdf_file)
+  #    
+  #   command <- 
   #   system(command)
-  # }
-  
+  #  }
+  # 
+  #pdf_list <- paste(shQuote(pdf_files))
+
+  pdf_list <- paste(shQuote(pdf_files), collapse = " ")
+
   #file.rename(output_pdf, output_pdf)
   command <- paste("pdftk", pdf_list, "cat output", shQuote(out_name))
   system(command)
@@ -359,11 +466,84 @@ combine_pdfs <- function(pdf_files, output_pdf = "output.pdf") {
   cat(out_name)
 }
 
+# Run it over all where the file exists
 toc_tracker %>%
     select(fullpdfs) %>%
     dplyr::filter(file_exists(fullpdfs)) %>%
-  pull(fullpdfs) %>%
+    pull(fullpdfs) %>%
+    append(paste0(basedir, "cover.pdf"), after=0) %>%
   combine_pdfs(., "ICQE23_Supplement_Proceedings.pdf")
+
+
+bookmarks <- data.frame(title = toc_tracker$title, page = toc_tracker$start_page+2)
+xmpdf::set_bookmarks(bookmarks, paste0(basedir, "ICQE23_Supplement_Proceedings.pdf"))
+
+#qpdf::pdf_overlay_stamp(input, stamp, output = NULL, password = "")
+#pdftools::pdf_compress(paste0(basedir, "ICQE23_Supplement_Proceedings.pdf"), output = "test.pdf")
+
+#Ideally delete any existing footer/header including page numbers, and repaginate...easier to do in gui 
+#and compress, also easier in gui
+#both using adobe acrobat pro
+
+```
+
+
+```{r}
+
+doc_1 <- read_docx() %>% 
+  print(target = paste0(basedir, "contents.docx"))
+
+
+title_format <- fp_par(padding.top = 8, text.align = "justify")
+author_format <- fp_par(padding.top = 0, text.align = "justify")
+#page_format <- fp_par(text.align = "right", padding.top = 8)
+
+windowsFonts("Times New Roman" = windowsFont("Times New Roman")) 
+plot.new()
+max_width <- strwidth("Enhancing Analytical Reading Performance in Science News through Metacognitive Video Modeling..               ",
+         units = "in", family = "Times New Roman", font = 10)
+space_width <- strwidth(".",units = "in", family = "Times New Roman", font = 10)
+
+#Map over fields
+toc_tracker %>%
+  #filter(page_count>2) %>%
+  select(title, authors, start_page) %>%
+purrr::pmap(function(title, authors, start_page){
+  
+  doc <- read_docx(path = paste0(basedir, "contents.docx"))
+
+  title <- ifelse(is.null(title), "", title)
+  authors <- ifelse(is.na(authors), " ", authors)
+  
+  #get length of last line of the title (or first/only, if under max_width), and subtract max_width
+  # white_space <- stringr::str_wrap(title, 100) %>%
+  #   str_split("\n", simplify=T) %>%
+  #   .[c(length(.))] %>%
+  #    strwidth(., units = "in", family = "Times New Roman", font = 10)
+  # white_space <- max_width - white_space
+  # #n of space
+  # white_space <- ceiling(white_space/space_width)
+  # white_space <- strrep(".", white_space)
+  
+  white_space <- "\t"
+  title <- c(title, white_space, start_page)
+  
+  title <- ftext(paste0(title), fp_text(font.size = 10, font.family = "Times New Roman"))
+  #page <- ftext(paste0(start_page), fp_text(font.size = 10, font.family = "Times New Roman"))
+  authors <- ftext(paste0("\t", authors), fp_text(font.size = 10, font.family = "Times New Roman", italic = T))
+
+  title <- officer::fpar(title, fp_p = title_format)
+  #page <- officer::fpar(page, fp_p = page_format)
+  authors <- officer::fpar(authors, fp_p = author_format)
+
+  doc %>%
+    body_add_fpar(title) %>% 
+    body_add_fpar(authors) %>%
+    print(target = paste0(basedir, "contents.docx"))
+
+}) 
+
+graphics.off()
 
 ```
 

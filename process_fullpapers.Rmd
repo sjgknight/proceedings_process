@@ -147,7 +147,7 @@ toc_tracker %>%
   NOTE = paste0("https://www.qesoc.org/images/pdf/ICQE23_Supplement_Proceedings.pdf#page=", start_page)
   ) %>%
   select(CATEGORY, BIBTEXKEY, AUTHOR, EDITOR, TITLE, YEAR, PUBLISHER, PAGES, BOOKTITLE, ADDRESS, ORGANIZATION) %>%
-    bib2df::df2bib("ICQE23_supplementary.bib")
+    bib2df::df2bib(paste0(basedir, "ICQE23_full.bib"))
 
 
 animation::ani.options(pdftk = "C:/Program Files (x86)/bin/pdftk.exe")
@@ -160,7 +160,7 @@ stamp <- glue::glue('stamp "\\def\\pagestext{{Page [page] of [topage]}}\\color{{
 
 stamp <- glue::glue("stamp 'hello world'")
 
-animation::pdftk(input = paste0("C:/Users/125295_admin/AppLockerExceptions/proceedings_process/", "test.pdf"), operation = stamp, output = paste0('"C:/Users/125295_admin/AppLockerExceptions/proceedings_process/"', 'test2.pdf"'))
+animation::pdftk(input = paste0(basedir, "test.pdf"), operation = stamp, output = paste0(basedir, 'test2.pdf"'))
 
 
 
