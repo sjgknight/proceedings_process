@@ -63,7 +63,7 @@ toc_tracker <- toc_tracker %>%
 ```
 
 ```{r pdfation, eval=FALSE, include=FALSE}
-#needs fixing
+#needs fixing, if you want to convert from docx/tex to pdf 
 
 toc_tracker %>%
   select(paper_n, fullpdfs) %>%
